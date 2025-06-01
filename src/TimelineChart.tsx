@@ -134,9 +134,10 @@ export const TimelineChart: FC<Props> = ({
   }, [barStep]);
 
   const applyInertia = useCallback(() => {
-    const friction = 0.9;
+    const friction = 0.86;
 
     const step = (timestamp: number) => {
+ 
       if (!containerRef.current) return;
 
       const dt = timestamp - lastTimestamp.current;
@@ -148,6 +149,7 @@ export const TimelineChart: FC<Props> = ({
         animationFrame.current = requestAnimationFrame(step);
       } else {
         snapToNearestBar();
+        velocityRef.current = 0;
       }
     };
 
@@ -209,7 +211,7 @@ export const TimelineChart: FC<Props> = ({
       const dx = e.clientX - dragStartXRef.current;
       const newScrollLeft = scrollStartRef.current - dx;
       containerRef.current.scrollLeft = newScrollLeft;
-      velocityRef.current = -(e.clientX - dragStartXRef.current) / 10;
+      velocityRef.current = -(e.clientX - dragStartXRef.current) / 2;
       dragStartXRef.current = e.clientX;
       scrollStartRef.current = newScrollLeft;
     },
