@@ -1,5 +1,13 @@
 import styled from "@emotion/styled";
-import { useCallback, useEffect, useRef, useState, type FC } from "react";
+import { debounce } from "es-toolkit";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from "react";
 
 export type BarData<T = unknown> = {
   id: string;
@@ -10,12 +18,14 @@ export type BarData<T = unknown> = {
 
 type Props<T = unknown> = {
   bars: BarData<T>[];
-  onBarClick?: (id: string) => void;
+  value?: string;
   maxHeight?: number;
   barWidth?: number;
-  borderRadius?: number;
   minBarHeight?: number;
   overscan?: number;
+  selectedColor?: string;
+  onBarClick?: (id: string, bar: BarData<T>) => void;
+  getBarHighlightColor?: (bar: BarData) => string;
 };
 
 const Wrapper = styled.div<{ isScrollable: boolean }>`
@@ -27,6 +37,10 @@ const Wrapper = styled.div<{ isScrollable: boolean }>`
 
   &.dragging {
     cursor: ${({ isScrollable }) => (isScrollable ? "grabbing" : "default")};
+  }
+
+  &:focus {
+    outline: none;
   }
 
   scrollbar-width: none;
@@ -48,7 +62,7 @@ const Bar = styled.div<{
   left: number;
   color: string;
   barWidth: number;
-  borderRadius: number;
+  hitboxWidth: number;
 }>`
   position: absolute;
   bottom: 0;
@@ -56,30 +70,50 @@ const Bar = styled.div<{
   width: ${({ barWidth }) => barWidth}px;
   height: ${({ height }) => height}px;
   background-color: ${({ color }) => color};
-  border-radius: ${({ borderRadius }) =>
-    `${borderRadius}px ${borderRadius}px 0 0`};
+  border-radius: ${({ barWidth, height }) => Math.min(barWidth, height) / 2}px;
   cursor: pointer;
 
   &:hover {
     opacity: 0.8;
   }
+  &::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: ${({ hitboxWidth }) => `${hitboxWidth}px`};
+    height: 100%;
+    cursor: inherit;
+  }
 `;
 
 export const TimelineChart: FC<Props> = ({
   bars,
-  onBarClick,
-  maxHeight = 30,
-  barWidth = 8,
-  borderRadius = 4,
-  minBarHeight = 4,
+  value: externalValue,
+  maxHeight = 36,
+  barWidth = 5,
+  minBarHeight = 12,
   overscan = 10,
+  selectedColor = "#0BA5BE",
+  onBarClick,
+  getBarHighlightColor,
 }) => {
+  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(
+    null
+  );
+  const selectedId = externalValue ?? internalSelectedId;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const [isScrollable, setIsScrollable] = useState(false);
 
-  const maxValue = Math.max(...bars.map((bar) => bar.value || 0), 1);
+  const maxValue = useMemo(() => {
+    if (bars.length === 0) return 1;
+    return bars.reduce((max, bar) => Math.max(max, bar.value || 0), 1);
+  }, [bars]);
+
   const barSpacing = 2;
   const barStep = barWidth + barSpacing;
   const totalWidth = bars.length * barStep;
@@ -91,8 +125,16 @@ export const TimelineChart: FC<Props> = ({
   const animationFrame = useRef(0);
   const lastTimestamp = useRef(0);
 
+  const snapToNearestBar = useCallback(() => {
+    if (!containerRef.current) return;
+    const scroll = containerRef.current.scrollLeft;
+    const nearestIndex = Math.round(scroll / barStep);
+    const snapTo = nearestIndex * barStep;
+    containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
+  }, [barStep]);
+
   const applyInertia = useCallback(() => {
-    const friction = 0.75;
+    const friction = 0.9;
 
     const step = (timestamp: number) => {
       if (!containerRef.current) return;
@@ -114,21 +156,13 @@ export const TimelineChart: FC<Props> = ({
       lastTimestamp.current = ts;
       step(ts);
     });
-  }, []);
+  }, [snapToNearestBar]);
 
-  const snapToNearestBar = () => {
-    if (!containerRef.current) return;
-    const scroll = containerRef.current.scrollLeft;
-    const nearestIndex = Math.round(scroll / barStep);
-    const snapTo = nearestIndex * barStep;
-    containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
-  };
-
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     if (containerRef.current) {
       setScrollLeft(containerRef.current.scrollLeft);
     }
-  };
+  }, []);
 
   const updateContainerWidth = useCallback(() => {
     if (containerRef.current) {
@@ -138,50 +172,88 @@ export const TimelineChart: FC<Props> = ({
     }
   }, []);
 
+  const debouncedUpdateContainerWidth = useMemo(
+    () => debounce(updateContainerWidth, 50),
+    [updateContainerWidth]
+  );
+
   useEffect(() => {
     updateContainerWidth();
-    window.addEventListener("resize", updateContainerWidth);
-    return () => window.removeEventListener("resize", updateContainerWidth);
-  }, [updateContainerWidth]);
+    window.addEventListener("resize", debouncedUpdateContainerWidth);
+    return () => {
+      window.removeEventListener("resize", debouncedUpdateContainerWidth);
+      debouncedUpdateContainerWidth.cancel?.();
+    };
+  }, [debouncedUpdateContainerWidth, updateContainerWidth]);
 
-  const onMouseDown = (e: React.MouseEvent) => {
-    isDraggingRef.current = true;
-    dragStartXRef.current = e.clientX;
-    scrollStartRef.current = containerRef.current?.scrollLeft || 0;
-    velocityRef.current = 0;
-    containerRef.current?.classList.add("dragging");
-  };
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isScrollable) return;
+      isDraggingRef.current = true;
+      dragStartXRef.current = e.clientX;
+      scrollStartRef.current = containerRef.current?.scrollLeft || 0;
+      velocityRef.current = 0;
+      cancelAnimationFrame(animationFrame.current);
+      if (containerRef.current) {
+        containerRef.current.classList.add("dragging");
+      }
+    },
+    [isScrollable]
+  );
 
-  const onMouseMove = (e: MouseEvent) => {
-    if (!isDraggingRef.current || !containerRef.current) return;
-    const dx = e.clientX - dragStartXRef.current;
-    containerRef.current.scrollLeft = scrollStartRef.current - dx;
-    velocityRef.current = -dx / 5;
-  };
+  const onMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (!isDraggingRef.current || !containerRef.current || !isScrollable)
+        return;
+      e.preventDefault();
+      const dx = e.clientX - dragStartXRef.current;
+      const newScrollLeft = scrollStartRef.current - dx;
+      containerRef.current.scrollLeft = newScrollLeft;
+      velocityRef.current = -(e.clientX - dragStartXRef.current) / 10;
+      dragStartXRef.current = e.clientX;
+      scrollStartRef.current = newScrollLeft;
+    },
+    [isScrollable]
+  ); // Добавили isScrollable
 
-  const onMouseUp = () => {
-    if (!isDraggingRef.current) return;
+  const onMouseUp = useCallback(() => {
+    if (!isDraggingRef.current || !isScrollable) return;
     isDraggingRef.current = false;
-    containerRef.current?.classList.remove("dragging");
-    applyInertia();
-  };
+    if (containerRef.current) {
+      containerRef.current.classList.remove("dragging");
+    }
+    if (Math.abs(velocityRef.current) > 0.5) {
+      applyInertia();
+    } else {
+      snapToNearestBar();
+    }
+  }, [applyInertia, isScrollable, snapToNearestBar]);
 
   useEffect(() => {
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
+    if (isScrollable) {
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    }
     return () => {
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
       cancelAnimationFrame(animationFrame.current);
     };
-  }, [applyInertia]);
+  }, [onMouseMove, onMouseUp, applyInertia, isScrollable]);
 
-  const barsPerView = Math.ceil(containerWidth / barStep);
+  const barsPerView = Math.ceil(containerWidth / barStep) || 1;
   const startIndex = Math.max(0, Math.floor(scrollLeft / barStep) - overscan);
   const endIndex = Math.min(
     bars.length,
     startIndex + barsPerView + overscan * 2
   );
+
+  const handleClick = (bar: BarData) => {
+    if (externalValue === undefined) {
+      setInternalSelectedId(bar.id);
+    }
+    onBarClick?.(bar.id, bar);
+  };
 
   return (
     <Wrapper
@@ -200,7 +272,10 @@ export const TimelineChart: FC<Props> = ({
           } else {
             barHeight = 0;
           }
-
+          const isSelected = bar.id === selectedId;
+          const color = isSelected
+            ? getBarHighlightColor?.(bar) ?? selectedColor
+            : bar.color;
           const left = index * barStep;
 
           return (
@@ -208,11 +283,11 @@ export const TimelineChart: FC<Props> = ({
               key={bar.id}
               left={left}
               barWidth={barWidth}
+              hitboxWidth={barStep}
               height={barHeight}
-              color={bar.color}
-              borderRadius={borderRadius}
-              onClick={() => onBarClick?.(bar.id)}
-              title={`ID: ${bar.id}`}
+              color={color}
+              onClick={() => handleClick(bar)}
+              title={`ID: ${bar.id}, Value: ${bar.value}`}
             />
           );
         })}

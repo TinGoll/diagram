@@ -11,8 +11,8 @@ const Grid = styled.div`
     min-height: 0px;
     min-width: 0px;
     border: 2px solid pink;
-    padding: 8px;
-    padding-bottom: 0;
+
+    padding-top: 8px;
   }
 `;
 
@@ -22,23 +22,24 @@ export const App = () => {
       <Grid>
         <div className="block">
           <TimelineChart
-            bars={Array.from({ length: 200 }, (_, i) => ({
+            getBarHighlightColor={(bar) => bar.value > 5 ? '#ED413E' : '#B2AB2E'}
+            bars={Array.from({ length: 20000 }, (_, i) => ({
               id: `bar-${i}`,
-              value: Math.random() * 100,
+              value: Math.random() * 10,
               color: i > 120 ? "#f66" : "#ccc",
             }))}
-            onBarClick={(id) => console.log("Clicked:", id)}
+            onBarClick={(id, bar) => console.log("Clicked:", id, bar)}
           />
         </div>
         <div className="block">
-          <TimelineChart
-            bars={Array.from({ length: 30 }, (_, i) => ({
+          {/* <TimelineChart
+            bars={Array.from({ length: 300000 }, (_, i) => ({
               id: `bar-${i}`,
               value: Math.random() * 100,
               color: i > 120 ? "#f66" : "#ccc",
             }))}
             onBarClick={(id) => console.log("Clicked:", id)}
-          />
+          /> */}
         </div>
       </Grid>
     </StyledApp>
