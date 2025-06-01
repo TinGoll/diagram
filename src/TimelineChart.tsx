@@ -24,20 +24,18 @@ type Props<T = unknown> = {
   minBarHeight?: number;
   overscan?: number;
   selectedColor?: string;
+  dragThreshold?: number;
   onBarClick?: (id: string, bar: BarData<T>) => void;
   getBarHighlightColor?: (bar: BarData) => string;
 };
 
-const Wrapper = styled.div<{ isScrollable: boolean }>`
+const Wrapper = styled.div<{ isScrollable: boolean; isActuallyDragging: boolean }>`
   overflow-x: scroll;
   overflow-y: hidden;
   user-select: none;
-  cursor: ${({ isScrollable }) => (isScrollable ? "grab" : "default")};
+  cursor: ${({ isScrollable, isActuallyDragging }) =>
+    isScrollable ? (isActuallyDragging ? "grabbing" : "grab") : "default"};
   height: 100%;
-
-  &.dragging {
-    cursor: ${({ isScrollable }) => (isScrollable ? "grabbing" : "default")};
-  }
 
   &:focus {
     outline: none;
@@ -63,6 +61,7 @@ const Bar = styled.div<{
   color: string;
   barWidth: number;
   hitboxWidth: number;
+  isContainerActuallyDragging: boolean;
 }>`
   position: absolute;
   bottom: 0;
@@ -71,11 +70,12 @@ const Bar = styled.div<{
   height: ${({ height }) => height}px;
   background-color: ${({ color }) => color};
   border-radius: ${({ barWidth, height }) => Math.min(barWidth, height) / 2}px;
-  cursor: pointer;
+  cursor: ${({ isContainerActuallyDragging }) => (isContainerActuallyDragging ? "grabbing" : "pointer")};
 
   &:hover {
-    opacity: 0.8;
+    opacity: ${({ isContainerActuallyDragging }) => (isContainerActuallyDragging ? 1 : 0.8)};
   }
+
   &::before {
     content: "";
     position: absolute;
@@ -88,18 +88,20 @@ const Bar = styled.div<{
   }
 `;
 
+
 export const TimelineChart: FC<Props> = ({
-  bars,
+   bars,
   value: externalValue,
   maxHeight = 36,
   barWidth = 5,
   minBarHeight = 12,
   overscan = 10,
   selectedColor = "#0BA5BE",
+  dragThreshold = 5,
   onBarClick,
   getBarHighlightColor,
 }) => {
-  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(
+ const [internalSelectedId, setInternalSelectedId] = useState<string | null>(
     null
   );
   const selectedId = externalValue ?? internalSelectedId;
@@ -108,6 +110,9 @@ export const TimelineChart: FC<Props> = ({
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const [isScrollable, setIsScrollable] = useState(false);
+  
+  // Состояние для UI (курсор), true только когда мышь зажата И было значительное движение
+  const [isActuallyDragging, setIsActuallyDragging] = useState(false); 
 
   const maxValue = useMemo(() => {
     if (bars.length === 0) return 1;
@@ -118,9 +123,13 @@ export const TimelineChart: FC<Props> = ({
   const barStep = barWidth + barSpacing;
   const totalWidth = bars.length * barStep;
 
-  const isDraggingRef = useRef(false);
-  const dragStartXRef = useRef(0);
-  const scrollStartRef = useRef(0);
+  const isMouseDownRef = useRef(false);
+  const hasMovedSignificantlyRef = useRef(false); 
+  const dragStartCoordsRef = useRef({ x: 0, y: 0 });
+  
+  const lastDragXRef = useRef(0);
+  const initialScrollLeftRef = useRef(0);
+  
   const velocityRef = useRef(0);
   const animationFrame = useRef(0);
   const lastTimestamp = useRef(0);
@@ -130,11 +139,14 @@ export const TimelineChart: FC<Props> = ({
     const scroll = containerRef.current.scrollLeft;
     const nearestIndex = Math.round(scroll / barStep);
     const snapTo = nearestIndex * barStep;
-    containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
+    requestAnimationFrame(() => {
+      containerRef.current?.scrollTo({ left: snapTo, behavior: "smooth" });
+    });
   }, [barStep]);
 
   const applyInertia = useCallback(() => {
-    const friction = 0.9;
+    const friction = 0.95;
+    let localVelocity = velocityRef.current;
 
     const step = (timestamp: number) => {
       if (!containerRef.current) return;
@@ -142,15 +154,14 @@ export const TimelineChart: FC<Props> = ({
       const dt = timestamp - lastTimestamp.current;
       lastTimestamp.current = timestamp;
 
-      if (Math.abs(velocityRef.current) > 0.1) {
-        containerRef.current.scrollLeft += velocityRef.current;
-        velocityRef.current *= Math.pow(friction, dt / 16);
+      if (Math.abs(localVelocity) > 0.1) {
+        containerRef.current.scrollLeft += localVelocity * (dt / 16);
+        localVelocity *= Math.pow(friction, dt / 16); 
         animationFrame.current = requestAnimationFrame(step);
       } else {
         snapToNearestBar();
       }
     };
-
     cancelAnimationFrame(animationFrame.current);
     animationFrame.current = requestAnimationFrame((ts) => {
       lastTimestamp.current = ts;
@@ -159,7 +170,7 @@ export const TimelineChart: FC<Props> = ({
   }, [snapToNearestBar]);
 
   const onScroll = useCallback(() => {
-    if (containerRef.current) {
+    if (containerRef.current && !isMouseDownRef.current) { 
       setScrollLeft(containerRef.current.scrollLeft);
     }
   }, []);
@@ -177,69 +188,106 @@ export const TimelineChart: FC<Props> = ({
     [updateContainerWidth]
   );
 
-  useEffect(() => {
+   useEffect(() => {
     updateContainerWidth();
-    window.addEventListener("resize", debouncedUpdateContainerWidth);
+    const debouncedHandler = debouncedUpdateContainerWidth;
+    window.addEventListener("resize", debouncedHandler);
     return () => {
-      window.removeEventListener("resize", debouncedUpdateContainerWidth);
-      debouncedUpdateContainerWidth.cancel?.();
+      window.removeEventListener("resize", debouncedHandler);
+      debouncedHandler.cancel?.();
+      cancelAnimationFrame(animationFrame.current);
     };
   }, [debouncedUpdateContainerWidth, updateContainerWidth]);
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!isScrollable) return;
-      isDraggingRef.current = true;
-      dragStartXRef.current = e.clientX;
-      scrollStartRef.current = containerRef.current?.scrollLeft || 0;
+      if (!isScrollable || e.button !== 0) return; 
+      
+      e.preventDefault(); 
+
+      isMouseDownRef.current = true;
+      hasMovedSignificantlyRef.current = false; // Сбрасываем флаг значительного движения
+      // setIsActuallyDragging(false); // Не ставим здесь, а в onMouseMove
+
+      dragStartCoordsRef.current = { x: e.clientX, y: e.clientY };
+      lastDragXRef.current = e.clientX; 
+      initialScrollLeftRef.current = containerRef.current?.scrollLeft || 0;
+      
       velocityRef.current = 0;
       cancelAnimationFrame(animationFrame.current);
-      if (containerRef.current) {
-        containerRef.current.classList.add("dragging");
-      }
     },
     [isScrollable]
   );
 
-  const onMouseMove = useCallback(
+  const onWindowMouseMove = useCallback(
     (e: MouseEvent) => {
-      if (!isDraggingRef.current || !containerRef.current || !isScrollable)
-        return;
-      e.preventDefault();
-      const dx = e.clientX - dragStartXRef.current;
-      const newScrollLeft = scrollStartRef.current - dx;
-      containerRef.current.scrollLeft = newScrollLeft;
-      velocityRef.current = -(e.clientX - dragStartXRef.current) / 10;
-      dragStartXRef.current = e.clientX;
-      scrollStartRef.current = newScrollLeft;
-    },
-    [isScrollable]
-  ); // Добавили isScrollable
+      if (!isMouseDownRef.current || !containerRef.current) return;
+      
+      // Не вызываем e.preventDefault() здесь сразу, чтобы позволить нормальный клик, если движения не было.
+      // Но если движение началось, то preventDefault нужен.
 
-  const onMouseUp = useCallback(() => {
-    if (!isDraggingRef.current || !isScrollable) return;
-    isDraggingRef.current = false;
-    if (containerRef.current) {
-      containerRef.current.classList.remove("dragging");
-    }
-    if (Math.abs(velocityRef.current) > 0.5) {
-      applyInertia();
-    } else {
-      snapToNearestBar();
-    }
-  }, [applyInertia, isScrollable, snapToNearestBar]);
+      const dxTotal = e.clientX - dragStartCoordsRef.current.x;
+      const dyTotal = e.clientY - dragStartCoordsRef.current.y;
+
+      if (!hasMovedSignificantlyRef.current) {
+        if (Math.sqrt(dxTotal * dxTotal + dyTotal * dyTotal) > dragThreshold) {
+          hasMovedSignificantlyRef.current = true;
+          setIsActuallyDragging(true); // Меняем курсор и UI-состояние
+        }
+      }
+      
+      if (hasMovedSignificantlyRef.current) {
+        e.preventDefault(); // Предотвращаем выделение текста и т.д. только при активном драге
+
+        // Инкрементальный скролл от последнего положения мыши
+        const deltaXSinceLastMove = e.clientX - lastDragXRef.current;
+        containerRef.current.scrollLeft -= deltaXSinceLastMove; // Двигаем контейнер
+        
+        velocityRef.current = -deltaXSinceLastMove / 2; // Скорость основана на последнем смещении
+        lastDragXRef.current = e.clientX; // Обновляем последнюю позицию X
+      }
+    },
+    [dragThreshold] 
+  );
+
+   const onWindowMouseUp = useCallback(
+    (e: MouseEvent) => { 
+      if (!isMouseDownRef.current) return; 
+
+      const wasSignificantDrag = hasMovedSignificantlyRef.current;
+
+      isMouseDownRef.current = false;
+      setIsActuallyDragging(false); 
+
+      if (wasSignificantDrag) {
+        if (Math.abs(velocityRef.current) > 0.5) { 
+            applyInertia();
+        } else {
+            snapToNearestBar();
+            velocityRef.current = 0;
+        }
+      }
+      // Если не было значительного драга (wasSignificantDrag === false),
+      // то это был клик (или очень маленькое движение).
+      // Никаких действий со скроллом (инерция/снаппинг) не предпринимаем.
+      // Клик будет обработан событием onClick на элементе Bar.
+      
+      // Сбрасываем hasMovedSignificantlyRef здесь не нужно, т.к. он сбрасывается в onMouseDown.
+      // velocityRef.current обнулится или будет использован инерцией.
+    }, [applyInertia, snapToNearestBar]
+  );
 
   useEffect(() => {
-    if (isScrollable) {
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
-    }
+    // Слушатели на window для корректной отработки mousemove/mouseup вне компонента
+    window.addEventListener("mousemove", onWindowMouseMove);
+    window.addEventListener("mouseup", onWindowMouseUp);
+    
     return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("mousemove", onWindowMouseMove);
+      window.removeEventListener("mouseup", onWindowMouseUp);
       cancelAnimationFrame(animationFrame.current);
     };
-  }, [onMouseMove, onMouseUp, applyInertia, isScrollable]);
+  }, [onWindowMouseMove, onWindowMouseUp]);
 
   const barsPerView = Math.ceil(containerWidth / barStep) || 1;
   const startIndex = Math.max(0, Math.floor(scrollLeft / barStep) - overscan);
@@ -248,20 +296,27 @@ export const TimelineChart: FC<Props> = ({
     startIndex + barsPerView + overscan * 2
   );
 
-  const handleClick = (bar: BarData) => {
-    if (externalValue === undefined) {
-      setInternalSelectedId(bar.id);
+  const handleBarClick = (barData: BarData) => {
+    // Клик обрабатывается, только если НЕ было значительного движения мыши
+    // hasMovedSignificantlyRef будет false, если это был чистый клик.
+    if (hasMovedSignificantlyRef.current) {
+      return; // Это был драг, игнорируем клик
     }
-    onBarClick?.(bar.id, bar);
+
+    if (externalValue === undefined) {
+      setInternalSelectedId(barData.id);
+    }
+    onBarClick?.(barData.id, barData);
   };
 
   return (
-    <Wrapper
+     <Wrapper
       ref={containerRef}
       onScroll={onScroll}
-      onMouseDown={onMouseDown}
+      onMouseDown={onMouseDown} 
       style={{ height: `${maxHeight}px` }}
       isScrollable={isScrollable}
+      isActuallyDragging={isActuallyDragging} // Передаем для стилизации курсора Wrapper
     >
       <Inner width={totalWidth}>
         {bars.slice(startIndex, endIndex).map((bar, i) => {
@@ -286,8 +341,8 @@ export const TimelineChart: FC<Props> = ({
               hitboxWidth={barStep}
               height={barHeight}
               color={color}
-              onClick={() => handleClick(bar)}
-              title={`ID: ${bar.id}, Value: ${bar.value}`}
+              isContainerActuallyDragging={isActuallyDragging} // Для курсора на самом баре
+              onClick={() => handleBarClick(bar)}
             />
           );
         })}

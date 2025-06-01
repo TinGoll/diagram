@@ -22,7 +22,10 @@ export const App = () => {
       <Grid>
         <div className="block">
           <TimelineChart
-            getBarHighlightColor={(bar) => bar.value > 5 ? '#ED413E' : '#B2AB2E'}
+            overscan={20}
+            getBarHighlightColor={(bar) =>
+              bar.value > 5 ? "#ED413E" : "#B2AB2E"
+            }
             bars={Array.from({ length: 20000 }, (_, i) => ({
               id: `bar-${i}`,
               value: Math.random() * 10,
