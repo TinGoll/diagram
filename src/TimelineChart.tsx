@@ -33,6 +33,8 @@ const Wrapper = styled.div<{ isScrollable: boolean }>`
   overflow-x: scroll;
   overflow-y: hidden;
   user-select: none;
+  will-change: scroll-position;
+  transform: translateZ(0);
   cursor: ${({ isScrollable }) => (isScrollable ? "grab" : "default")};
   height: 100%;
 
