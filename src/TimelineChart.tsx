@@ -1,13 +1,10 @@
 import styled from "@emotion/styled";
-import { debounce } from "es-toolkit";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FC,
-} from "react";
+import { useRef } from "react";
+import { useBarMetrics } from "./hooks/useBarMetrics";
+import { useContainerDimensions } from "./hooks/useContainerDimensions";
+import { useScrollAndDrag } from "./hooks/useScrollAndDrag";
+import { useVirtualization } from "./hooks/useVirtualization";
+import { useBarSelection } from "./hooks/useBarSelection";
 
 export type BarData<T = unknown> = {
   id: string;
@@ -75,7 +72,8 @@ const Bar = styled.div<{
   height: ${({ height }) => height}px;
   background-color: ${({ color }) => color};
   border-radius: ${({ barWidth, height }) => Math.min(barWidth, height) / 2}px;
-  cursor: ${({ isContainerActuallyDragging }) => (isContainerActuallyDragging ? "grabbing" : "pointer")};
+  cursor: ${({ isContainerActuallyDragging }) =>
+    isContainerActuallyDragging ? "grabbing" : "pointer"};
 
   &:hover {
     opacity: 0.8;
@@ -92,224 +90,61 @@ const Bar = styled.div<{
   }
 `;
 
-export const TimelineChart: FC<Props> = ({
-  bars,
-  value: externalValue,
-  maxHeight = 36,
-  barWidth = 5,
-  minBarHeight = 12,
-  overscan = 10,
-  selectedColor = "#0BA5BE",
-  dragThreshold = 5,
-  onBarClick,
-  getBarHighlightColor,
-}) => {
-  const [internalSelectedId, setInternalSelectedId] = useState<string | null>(
-    null
-  );
-  const selectedId = externalValue ?? internalSelectedId;
+export const TimelineChart = <T = unknown,>(props: Props<T>) => {
+  const {
+    bars,
+    value: externalValue,
+    maxHeight = 36,
+    barWidth = 5,
+    minBarHeight = 12,
+    overscan = 10,
+    selectedColor = "#0BA5BE",
+    dragThreshold = 5,
+    onBarClick,
+    getBarHighlightColor,
+  } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [scrollLeft, setScrollLeft] = useState(0);
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [isScrollable, setIsScrollable] = useState(false);
-  const [isActuallyDragging, setIsActuallyDragging] = useState(false); 
+  const { maxValue, barStep } = useBarMetrics<T>({ bars, barWidth });
 
-  const maxValue = useMemo(() => {
-    if (bars.length === 0) return 1;
-    return bars.reduce((max, bar) => Math.max(max, bar.value || 0), 1);
-  }, [bars]);
+  const { containerWidth, isScrollable, totalWidth } = useContainerDimensions({
+    containerRef,
+    barsLength: bars.length,
+    barStep,
+  });
 
-  const barSpacing = 2;
-  const barStep = barWidth + barSpacing;
-  const totalWidth = bars.length * barStep;
+  const {
+    scrollLeft,
+    isActuallyDragging,
+    didMoveSignificantlyRef,
+    handleMouseDown,
+    handleScroll,
+  } = useScrollAndDrag({
+    containerRef,
+    barStep,
+    isScrollable,
+    dragThreshold,
+  });
 
-  const isDraggingRef = useRef(false);
-  const didMoveSignificantlyRef = useRef(false);
-  const dragStartCoordsRef = useRef({ x: 0, y: 0 });
+  const { startIndex, endIndex } = useVirtualization({
+    scrollLeft,
+    containerWidth,
+    barStep,
+    barsLength: bars.length,
+    overscan,
+  });
 
-  const dragStartXRef = useRef(0);
-  const scrollStartRef = useRef(0);
-
-  const velocityRef = useRef(0);
-  const animationFrame = useRef(0);
-  const lastTimestamp = useRef(0);
-
-  const snapToNearestBar = useCallback(() => {
-    if (!containerRef.current) return;
-    const scroll = containerRef.current.scrollLeft;
-    const nearestIndex = Math.round(scroll / barStep);
-    const snapTo = nearestIndex * barStep;
-
-    containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
-  }, [barStep]);
-
-  const applyInertia = useCallback(() => {
-    const friction = 0.86;
-
-    const step = (timestamp: number) => {
-      if (!containerRef.current) return;
-
-      const dt = timestamp - lastTimestamp.current;
-      lastTimestamp.current = timestamp;
-
-      if (Math.abs(velocityRef.current) > 0.1) {
-        containerRef.current.scrollLeft += velocityRef.current;
-        velocityRef.current *= Math.pow(friction, dt / 16);
-        animationFrame.current = requestAnimationFrame(step);
-      } else {
-        snapToNearestBar();
-        velocityRef.current = 0;
-      }
-    };
-
-    cancelAnimationFrame(animationFrame.current);
-    animationFrame.current = requestAnimationFrame((ts) => {
-      lastTimestamp.current = ts;
-      step(ts);
-    });
-  }, [snapToNearestBar]);
-
-  const onScroll = useCallback(() => {
-    if (containerRef.current) {
-      setScrollLeft(containerRef.current.scrollLeft);
-    }
-  }, []);
-
-  const updateContainerWidth = useCallback(() => {
-    if (containerRef.current) {
-      const current = containerRef.current;
-      setContainerWidth(current.offsetWidth);
-      setIsScrollable(current.scrollWidth > current.clientWidth);
-    }
-  }, []);
-
-  const debouncedUpdateContainerWidth = useMemo(
-    () => debounce(updateContainerWidth, 50),
-    [updateContainerWidth]
-  );
-
-  useEffect(() => {
-    updateContainerWidth();
-    window.addEventListener("resize", debouncedUpdateContainerWidth);
-    return () => {
-      window.removeEventListener("resize", debouncedUpdateContainerWidth);
-      debouncedUpdateContainerWidth.cancel?.();
-    };
-  }, [debouncedUpdateContainerWidth, updateContainerWidth]);
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isScrollable) {
-        return;
-      }
-
-      e.preventDefault();
-
-      isDraggingRef.current = true;
-      didMoveSignificantlyRef.current = false;
-      dragStartCoordsRef.current = { x: e.clientX, y: e.clientY };
-
-      dragStartXRef.current = e.clientX;
-      scrollStartRef.current = containerRef.current?.scrollLeft || 0;
-      velocityRef.current = 0;
-
-      cancelAnimationFrame(animationFrame.current);
-      if (containerRef.current) {
-        containerRef.current.classList.add("dragging");
-      }
-    },
-    [isScrollable]
-  );
-
-  const onMouseMove = useCallback(
-    (e: MouseEvent) => {
-      if (!isDraggingRef.current || !containerRef.current || !isScrollable) {
-        return;
-      }
-
-      const dxTotal = e.clientX - dragStartCoordsRef.current.x;
-
-      e.preventDefault();
-
-      if (!didMoveSignificantlyRef.current) {
-        if (Math.abs(dxTotal) > dragThreshold) {
-          didMoveSignificantlyRef.current = true;
-          setIsActuallyDragging(true);
-        }
-      }
-
-      if (didMoveSignificantlyRef.current) {
-        const dx = e.clientX - dragStartXRef.current;
-        const newScrollLeft = scrollStartRef.current - dx;
-
-        containerRef.current.scrollLeft = newScrollLeft;
-        velocityRef.current = -(e.clientX - dragStartXRef.current) / 2;
-        dragStartXRef.current = e.clientX;
-        scrollStartRef.current = newScrollLeft;
-      }
-    },
-    [isScrollable]
-  ); // Добавили isScrollable
-
-  const onMouseUp = useCallback(() => {
-    if (!isDraggingRef.current || !isScrollable) {
-      return;
-    }
-
-    const wasSignificantDrag = didMoveSignificantlyRef.current;
-    isDraggingRef.current = false;
-    setIsActuallyDragging(false); 
-
-    if (containerRef.current) {
-      containerRef.current.classList.remove("dragging");
-    }
-
-    if (wasSignificantDrag) {
-      if (Math.abs(velocityRef.current) > 0.5) {
-        applyInertia();
-      } else {
-        snapToNearestBar();
-        velocityRef.current = 0;
-      }
-    }
-  }, [applyInertia, isScrollable, snapToNearestBar]);
-
-  useEffect(() => {
-    if (isScrollable) {
-      window.addEventListener("mousemove", onMouseMove);
-      window.addEventListener("mouseup", onMouseUp);
-    }
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-      cancelAnimationFrame(animationFrame.current);
-    };
-  }, [onMouseMove, onMouseUp, applyInertia, isScrollable]);
-
-  const barsPerView = Math.ceil(containerWidth / barStep) || 1;
-  const startIndex = Math.max(0, Math.floor(scrollLeft / barStep) - overscan);
-  const endIndex = Math.min(
-    bars.length,
-    startIndex + barsPerView + overscan * 2
-  );
-
-  const handleClick = (bar: BarData) => {
-    if (didMoveSignificantlyRef.current) {
-      return;
-    }
-
-    if (externalValue === undefined) {
-      setInternalSelectedId(bar.id);
-    }
-    onBarClick?.(bar.id, bar);
-  };
+  const { selectedId, handleBarClick } = useBarSelection<T>({
+    externalValue,
+    onBarClick,
+    didMoveSignificantlyRef,
+  });
 
   return (
     <Wrapper
       ref={containerRef}
-      onScroll={onScroll}
-      onMouseDown={onMouseDown}
+      onScroll={handleScroll}
+      onMouseDown={handleMouseDown}
       style={{ height: `${maxHeight}px` }}
       isScrollable={isScrollable}
     >
@@ -336,7 +171,7 @@ export const TimelineChart: FC<Props> = ({
               hitboxWidth={barStep}
               height={barHeight}
               color={color}
-              onClick={() => handleClick(bar)}
+              onClick={() => handleBarClick(bar)}
               title={`ID: ${bar.id}, Value: ${bar.value}`}
               isContainerActuallyDragging={isActuallyDragging}
             />
