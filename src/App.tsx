@@ -32,14 +32,14 @@ export const App = () => {
           />
         </div>
         <div className="block">
-          {/* <TimelineChart
-            bars={Array.from({ length: 300000 }, (_, i) => ({
+          <TimelineChart
+            bars={Array.from({ length: 100 }, (_, i) => ({
               id: `bar-${i}`,
               value: Math.random() * 100,
               color: i > 120 ? "#f66" : "#ccc",
             }))}
             onBarClick={(id) => console.log("Clicked:", id)}
-          /> */}
+          />
         </div>
       </Grid>
     </StyledApp>

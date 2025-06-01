@@ -24,6 +24,7 @@ type Props<T = unknown> = {
   minBarHeight?: number;
   overscan?: number;
   selectedColor?: string;
+  dragThreshold?: number;
   onBarClick?: (id: string, bar: BarData<T>) => void;
   getBarHighlightColor?: (bar: BarData) => string;
 };
@@ -63,6 +64,7 @@ const Bar = styled.div<{
   color: string;
   barWidth: number;
   hitboxWidth: number;
+  isContainerActuallyDragging: boolean;
 }>`
   position: absolute;
   bottom: 0;
@@ -71,7 +73,7 @@ const Bar = styled.div<{
   height: ${({ height }) => height}px;
   background-color: ${({ color }) => color};
   border-radius: ${({ barWidth, height }) => Math.min(barWidth, height) / 2}px;
-  cursor: pointer;
+  cursor: ${({ isContainerActuallyDragging }) => (isContainerActuallyDragging ? "grabbing" : "pointer")};
 
   &:hover {
     opacity: 0.8;
@@ -96,6 +98,7 @@ export const TimelineChart: FC<Props> = ({
   minBarHeight = 12,
   overscan = 10,
   selectedColor = "#0BA5BE",
+  dragThreshold = 5,
   onBarClick,
   getBarHighlightColor,
 }) => {
@@ -108,6 +111,7 @@ export const TimelineChart: FC<Props> = ({
   const [scrollLeft, setScrollLeft] = useState(0);
   const [containerWidth, setContainerWidth] = useState(0);
   const [isScrollable, setIsScrollable] = useState(false);
+  const [isActuallyDragging, setIsActuallyDragging] = useState(false); 
 
   const maxValue = useMemo(() => {
     if (bars.length === 0) return 1;
@@ -119,8 +123,12 @@ export const TimelineChart: FC<Props> = ({
   const totalWidth = bars.length * barStep;
 
   const isDraggingRef = useRef(false);
+  const didMoveSignificantlyRef = useRef(false);
+  const dragStartCoordsRef = useRef({ x: 0, y: 0 });
+
   const dragStartXRef = useRef(0);
   const scrollStartRef = useRef(0);
+
   const velocityRef = useRef(0);
   const animationFrame = useRef(0);
   const lastTimestamp = useRef(0);
@@ -130,6 +138,7 @@ export const TimelineChart: FC<Props> = ({
     const scroll = containerRef.current.scrollLeft;
     const nearestIndex = Math.round(scroll / barStep);
     const snapTo = nearestIndex * barStep;
+
     containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
   }, [barStep]);
 
@@ -137,7 +146,6 @@ export const TimelineChart: FC<Props> = ({
     const friction = 0.86;
 
     const step = (timestamp: number) => {
- 
       if (!containerRef.current) return;
 
       const dt = timestamp - lastTimestamp.current;
@@ -190,11 +198,20 @@ export const TimelineChart: FC<Props> = ({
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (!isScrollable) return;
+      if (!isScrollable) {
+        return;
+      }
+
+      e.preventDefault();
+
       isDraggingRef.current = true;
+      didMoveSignificantlyRef.current = false;
+      dragStartCoordsRef.current = { x: e.clientX, y: e.clientY };
+
       dragStartXRef.current = e.clientX;
       scrollStartRef.current = containerRef.current?.scrollLeft || 0;
       velocityRef.current = 0;
+
       cancelAnimationFrame(animationFrame.current);
       if (containerRef.current) {
         containerRef.current.classList.add("dragging");
@@ -205,29 +222,54 @@ export const TimelineChart: FC<Props> = ({
 
   const onMouseMove = useCallback(
     (e: MouseEvent) => {
-      if (!isDraggingRef.current || !containerRef.current || !isScrollable)
+      if (!isDraggingRef.current || !containerRef.current || !isScrollable) {
         return;
+      }
+
+      const dxTotal = e.clientX - dragStartCoordsRef.current.x;
+
       e.preventDefault();
-      const dx = e.clientX - dragStartXRef.current;
-      const newScrollLeft = scrollStartRef.current - dx;
-      containerRef.current.scrollLeft = newScrollLeft;
-      velocityRef.current = -(e.clientX - dragStartXRef.current) / 2;
-      dragStartXRef.current = e.clientX;
-      scrollStartRef.current = newScrollLeft;
+
+      if (!didMoveSignificantlyRef.current) {
+        if (Math.abs(dxTotal) > dragThreshold) {
+          didMoveSignificantlyRef.current = true;
+          setIsActuallyDragging(true);
+        }
+      }
+
+      if (didMoveSignificantlyRef.current) {
+        const dx = e.clientX - dragStartXRef.current;
+        const newScrollLeft = scrollStartRef.current - dx;
+
+        containerRef.current.scrollLeft = newScrollLeft;
+        velocityRef.current = -(e.clientX - dragStartXRef.current) / 2;
+        dragStartXRef.current = e.clientX;
+        scrollStartRef.current = newScrollLeft;
+      }
     },
     [isScrollable]
   ); // Добавили isScrollable
 
   const onMouseUp = useCallback(() => {
-    if (!isDraggingRef.current || !isScrollable) return;
+    if (!isDraggingRef.current || !isScrollable) {
+      return;
+    }
+
+    const wasSignificantDrag = didMoveSignificantlyRef.current;
     isDraggingRef.current = false;
+    setIsActuallyDragging(false); 
+
     if (containerRef.current) {
       containerRef.current.classList.remove("dragging");
     }
-    if (Math.abs(velocityRef.current) > 0.5) {
-      applyInertia();
-    } else {
-      snapToNearestBar();
+
+    if (wasSignificantDrag) {
+      if (Math.abs(velocityRef.current) > 0.5) {
+        applyInertia();
+      } else {
+        snapToNearestBar();
+        velocityRef.current = 0;
+      }
     }
   }, [applyInertia, isScrollable, snapToNearestBar]);
 
@@ -251,6 +293,10 @@ export const TimelineChart: FC<Props> = ({
   );
 
   const handleClick = (bar: BarData) => {
+    if (didMoveSignificantlyRef.current) {
+      return;
+    }
+
     if (externalValue === undefined) {
       setInternalSelectedId(bar.id);
     }
@@ -290,6 +336,7 @@ export const TimelineChart: FC<Props> = ({
               color={color}
               onClick={() => handleClick(bar)}
               title={`ID: ${bar.id}, Value: ${bar.value}`}
+              isContainerActuallyDragging={isActuallyDragging}
             />
           );
         })}
