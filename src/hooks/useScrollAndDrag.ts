@@ -1,171 +1,101 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { animate, useMotionValue, type PanInfo } from "motion/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type UseScrollAndDragReturn = {
-    scrollLeft: number
-    isActuallyDragging: boolean
-    didMoveSignificantlyRef: RefObject<boolean>
-    handleMouseDown: (event: React.MouseEvent) => void
-    handleScroll: () => void
+    x: ReturnType<typeof useMotionValue<number>>;
+    handleDragStart: () => void;
+    handleDrag: (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => void;
+    handleDragEnd: (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => void;
+    currentScrollX: number;
 }
 
 type UseScrollAndDragProps = {
-    containerRef: RefObject<HTMLDivElement | null>;
     barStep: number;
+    totalWidth: number;
+    containerWidth: number;
     isScrollable: boolean;
     dragThreshold: number;
+    initialScrollIndex?: number;
 };
 
 export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDragReturn => {
-    const { containerRef, barStep, isScrollable, dragThreshold } = props;
+    const {
+        totalWidth,
+        containerWidth,
+        isScrollable,
+        dragThreshold,
+        initialScrollIndex = 0,
+    } = props;
 
-    const [scrollLeft, setScrollLeft] = useState(0);
-    const [isActuallyDragging, setIsActuallyDragging] = useState(false);
+    const calculateInitialX = useCallback(() => {
+        return -Math.min(
+            Math.max(0, initialScrollIndex * props.barStep),
+            Math.max(0, totalWidth - containerWidth)
+        );
+    }, [initialScrollIndex, props.barStep, totalWidth, containerWidth]);
 
-    const isDraggingRef = useRef(false);
+    const x = useMotionValue(calculateInitialX());
+    const [currentScrollX, setCurrentScrollX] = useState(-x.get());
+
     const didMoveSignificantlyRef = useRef(false);
-    const dragStartCoordsRef = useRef({ x: 0, y: 0 });
-    const dragStartXRef = useRef(0);
-    const scrollStartRef = useRef(0);
-    const velocityRef = useRef(0);
-    const animationFrame = useRef(0);
-    const lastTimestamp = useRef(0);
+    const isDraggingOptimizationRef = useRef(false);
 
-    const snapToNearestBar = useCallback(() => {
-        if (!containerRef.current) return;
-        const scroll = containerRef.current.scrollLeft;
-        const nearestIndex = Math.round(scroll / barStep);
-        const snapTo = nearestIndex * barStep;
-
-        containerRef.current.scrollTo({ left: snapTo, behavior: "smooth" });
-    }, [barStep]);
-
-    const applyInertia = useCallback(() => {
-        const friction = 0.86;
-
-        const step = (timestamp: number) => {
-            if (!containerRef.current) return;
-
-            const dt = timestamp - lastTimestamp.current;
-            lastTimestamp.current = timestamp;
-
-            if (Math.abs(velocityRef.current) > 0.1) {
-                containerRef.current.scrollLeft += velocityRef.current;
-                velocityRef.current *= Math.pow(friction, dt / 16);
-                animationFrame.current = requestAnimationFrame(step);
-            } else {
-                snapToNearestBar();
-                velocityRef.current = 0;
-            }
-        };
-
-        cancelAnimationFrame(animationFrame.current);
-        animationFrame.current = requestAnimationFrame((timestamp) => {
-            lastTimestamp.current = timestamp;
-            step(timestamp);
+    useEffect(() => {
+        const unsubscribeX = x.onChange((latestX) => {
+            setCurrentScrollX(-latestX);
         });
-    }, [snapToNearestBar]);
+        setCurrentScrollX(-calculateInitialX());
+        return () => {
+            unsubscribeX();
+        };
+    }, [x, calculateInitialX]);
 
-    const handleScroll = useCallback(() => {
-        if (containerRef.current) {
-            setScrollLeft(containerRef.current.scrollLeft);
-        }
-    }, []);
 
-    const handleMouseDown = useCallback(
-        (event: React.MouseEvent) => {
-            if (!isScrollable || !containerRef.current) {
-                return;
-            };
+    const handleDragStart = useCallback(() => {
+        if (!isScrollable) return;
+        x.stop();
+        didMoveSignificantlyRef.current = false;
+        isDraggingOptimizationRef.current = true;
+    }, [isScrollable, x]);
 
-            event.preventDefault();
-            isDraggingRef.current = true;
-            didMoveSignificantlyRef.current = false;
-            setIsActuallyDragging(false);
-
-            dragStartCoordsRef.current = { x: event.clientX, y: event.clientY };
-            dragStartXRef.current = event.clientX;
-            scrollStartRef.current = containerRef.current.scrollLeft;
-            velocityRef.current = 0;
-
-            cancelAnimationFrame(animationFrame.current);
-            containerRef.current.classList.add("dragging");
-        },
-        [isScrollable]
-    );
-
-    const handleMouseMove = useCallback(
-        (event: MouseEvent) => {
-            if (!isDraggingRef.current || !containerRef.current || !isScrollable) {
+    const handleDrag = useCallback(
+        (_: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+            if (!isScrollable || !isDraggingOptimizationRef.current || didMoveSignificantlyRef.current) {
                 return;
             }
-            event.preventDefault();
-
-            const dxTotal = event.clientX - dragStartCoordsRef.current.x;
-
-            if (!didMoveSignificantlyRef.current && Math.abs(dxTotal) > dragThreshold) {
+            const movedDistance = Math.sqrt(info.offset.x ** 2 + info.offset.y ** 2);
+            if (movedDistance > dragThreshold) {
+                console.log('[useTimelineMotion handleDrag] Significant move detected.');
                 didMoveSignificantlyRef.current = true;
-                setIsActuallyDragging(true);
-            }
-
-            if (didMoveSignificantlyRef.current) {
-                const dx = event.clientX - dragStartXRef.current;
-                const newScrollLeft = scrollStartRef.current - dx;
-
-                containerRef.current.scrollLeft = newScrollLeft;
-                velocityRef.current = -(event.clientX - dragStartXRef.current) / 2;
-                dragStartXRef.current = event.clientX;
-                scrollStartRef.current = newScrollLeft;
             }
         },
         [isScrollable, dragThreshold]
     );
 
-    const handleMouseUp = useCallback(() => {
-        if (!isDraggingRef.current || !isScrollable || !containerRef.current) {
-            return;
-        }
-
-        const wasSignificantDrag = didMoveSignificantlyRef.current;
-        isDraggingRef.current = false;
-        setIsActuallyDragging(false);
-
-        containerRef.current.classList.remove("dragging");
-
-        if (wasSignificantDrag) {
-            if (Math.abs(velocityRef.current) > 0.5) {
-                applyInertia();
-            } else {
-                snapToNearestBar();
-                velocityRef.current = 0;
-            }
-        }
-    }, [isScrollable, applyInertia, snapToNearestBar]);
+    const handleDragEnd = useCallback(
+        () => {
+            isDraggingOptimizationRef.current = false;
+            if (!isScrollable) {
+                return;
+            };
+        },
+        [isScrollable]
+    );
 
     useEffect(() => {
-        if (isScrollable) {
-            window.addEventListener("mousemove", handleMouseMove);
-            window.addEventListener("mouseup", handleMouseUp);
+        const newInitialX = calculateInitialX();
+        if (x.get() !== newInitialX) {
+            animate(x, newInitialX, { type: "spring", stiffness: 300, damping: 30 });
         }
-        return () => {
-            window.removeEventListener("mousemove", handleMouseMove);
-            window.removeEventListener("mouseup", handleMouseUp);
-            cancelAnimationFrame(animationFrame.current);
-        };
-    }, [isScrollable, handleMouseMove, handleMouseUp]);
+    }, [initialScrollIndex, calculateInitialX, x]);
 
-    useEffect(() => {
-        if (containerRef.current) {
-            setScrollLeft(containerRef.current.scrollLeft);
-        }
-    }, []);
 
     return {
-        scrollLeft,
-        isActuallyDragging,
-        didMoveSignificantlyRef,
-        handleMouseDown,
-        handleScroll,
+        x,
+        handleDragStart,
+        handleDrag,
+        handleDragEnd,
+        currentScrollX,
     };
-
 
 }

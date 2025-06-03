@@ -1,10 +1,11 @@
 import styled from "@emotion/styled";
-import { useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useBarMetrics } from "./hooks/useBarMetrics";
 import { useContainerDimensions } from "./hooks/useContainerDimensions";
 import { useScrollAndDrag } from "./hooks/useScrollAndDrag";
 import { useVirtualization } from "./hooks/useVirtualization";
 import { useBarSelection } from "./hooks/useBarSelection";
+import { motion } from "motion/react";
 
 export type BarData<T = unknown> = {
   id: string;
@@ -23,47 +24,38 @@ type Props<T = unknown> = {
   selectedColor?: string;
   dragThreshold?: number;
   onBarClick?: (id: string, bar: BarData<T>) => void;
-  getBarHighlightColor?: (bar: BarData) => string;
+  getBarHighlightColor?: (bar: BarData<T>) => string;
+  initialScrollIndex?: number;
 };
-
 const Wrapper = styled.div<{ isScrollable: boolean }>`
-  overflow-x: scroll;
-  overflow-y: hidden;
+  overflow: hidden;
   user-select: none;
-  will-change: scroll-position;
+  will-change: transform;
   transform: translateZ(0);
   cursor: ${({ isScrollable }) => (isScrollable ? "grab" : "default")};
   height: 100%;
 
-  &.dragging {
+  &.custom-dragging {
     cursor: ${({ isScrollable }) => (isScrollable ? "grabbing" : "default")};
   }
 
   &:focus {
     outline: none;
   }
-
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
 `;
 
-const Inner = styled.div<{ width: number }>`
+const Inner = styled(motion.div)<{ width: number }>`
   position: relative;
   height: 100%;
   width: ${({ width }) => width}px;
 `;
 
-const Bar = styled.div<{
+const Bar = styled(motion.div)<{
   height: number;
   left: number;
   color: string;
   barWidth: number;
   hitboxWidth: number;
-  isContainerActuallyDragging: boolean;
 }>`
   position: absolute;
   bottom: 0;
@@ -72,8 +64,7 @@ const Bar = styled.div<{
   height: ${({ height }) => height}px;
   background-color: ${({ color }) => color};
   border-radius: ${({ barWidth, height }) => Math.min(barWidth, height) / 2}px;
-  cursor: ${({ isContainerActuallyDragging }) =>
-    isContainerActuallyDragging ? "grabbing" : "pointer"};
+  cursor: pointer;
 
   &:hover {
     opacity: 0.8;
@@ -102,9 +93,11 @@ export const TimelineChart = <T = unknown,>(props: Props<T>) => {
     dragThreshold = 5,
     onBarClick,
     getBarHighlightColor,
+    initialScrollIndex = 0,
   } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
+
   const { maxValue, barStep } = useBarMetrics<T>({ bars, barWidth });
 
   const { containerWidth, isScrollable, totalWidth } = useContainerDimensions({
@@ -113,21 +106,18 @@ export const TimelineChart = <T = unknown,>(props: Props<T>) => {
     barStep,
   });
 
-  const {
-    scrollLeft,
-    isActuallyDragging,
-    didMoveSignificantlyRef,
-    handleMouseDown,
-    handleScroll,
-  } = useScrollAndDrag({
-    containerRef,
-    barStep,
-    isScrollable,
-    dragThreshold,
-  });
+  const { x, handleDragStart, handleDrag, handleDragEnd, currentScrollX } =
+    useScrollAndDrag({
+      barStep, // Передаем barStep
+      totalWidth,
+      containerWidth,
+      isScrollable,
+      dragThreshold,
+      initialScrollIndex,
+    });
 
   const { startIndex, endIndex } = useVirtualization({
-    scrollLeft,
+    currentScrollX,
     containerWidth,
     barStep,
     barsLength: bars.length,
@@ -137,43 +127,79 @@ export const TimelineChart = <T = unknown,>(props: Props<T>) => {
   const { selectedId, handleBarClick } = useBarSelection<T>({
     externalValue,
     onBarClick,
-    didMoveSignificantlyRef,
   });
+
+  const dragConstraints = useMemo(() => {
+    if (!isScrollable || totalWidth <= containerWidth) {
+      return { left: 0, right: 0 };
+    }
+    const maxLeft = -(totalWidth - containerWidth);
+    return { left: maxLeft, right: 0 };
+  }, [isScrollable, totalWidth, containerWidth]);
+
+  const [isVisuallyDragging, setIsVisuallyDragging] = useState(false);
 
   return (
     <Wrapper
       ref={containerRef}
-      onScroll={handleScroll}
-      onMouseDown={handleMouseDown}
       style={{ height: `${maxHeight}px` }}
       isScrollable={isScrollable}
+      className={isVisuallyDragging && isScrollable ? "custom-dragging" : ""}
     >
-      <Inner width={totalWidth}>
-        {bars.slice(startIndex, endIndex).map((bar, i) => {
-          const index = startIndex + i;
-          let barHeight = (bar.value / maxValue) * maxHeight;
-          if (bar.value > 0) {
+      <Inner
+        width={totalWidth}
+        style={{ x }}
+        drag={isScrollable ? "x" : false}
+        dragConstraints={dragConstraints}
+        onDragStart={() => {
+          setIsVisuallyDragging(true);
+          handleDragStart();
+        }}
+        onDrag={handleDrag}
+        onDragEnd={(event, info) => {
+          setIsVisuallyDragging(false);
+          handleDragEnd(event, info);
+        }}
+        dragElastic={0.05} // Настройте по вкусу (0 для отсутствия "резины")
+        dragTransition={{
+          // Ключевая настройка инерции!
+          power: 0.4, // Дальность "броска" (0.3 - 0.8)
+          timeConstant: 400, // Длительность инерции (300ms - 700ms)
+          // Другие параметры для тонкой настройки:
+          // bounceStiffness: 500,
+          // bounceDamping: 25,
+          // min: dragConstraints.left, // Можно явно задать, если нужно
+          // max: dragConstraints.right,
+          // restDelta: 0.5, // Порог для остановки анимации
+        }}
+      >
+        {bars.slice(startIndex, endIndex).map((barItem, i) => {
+          const globalIndex = startIndex + i;
+          let barHeight = (barItem.value / maxValue) * maxHeight;
+          if (barItem.value > 0) {
             barHeight = Math.max(barHeight, minBarHeight);
           } else {
             barHeight = 0;
           }
-          const isSelected = bar.id === selectedId;
+          const isSelected = barItem.id === selectedId;
           const color = isSelected
-            ? getBarHighlightColor?.(bar) ?? selectedColor
-            : bar.color;
-          const left = index * barStep;
+            ? getBarHighlightColor?.(barItem) ?? selectedColor
+            : barItem.color;
+          const left = globalIndex * barStep;
 
           return (
             <Bar
-              key={bar.id}
+              key={barItem.id}
               left={left}
               barWidth={barWidth}
               hitboxWidth={barStep}
               height={barHeight}
               color={color}
-              onClick={() => handleBarClick(bar)}
-              title={`ID: ${bar.id}, Value: ${bar.value}`}
-              isContainerActuallyDragging={isActuallyDragging}
+              onTap={() => {
+                console.log(`[Bar onTap event] Bar ID: ${barItem.id}`);
+                handleBarClick(barItem);
+              }}
+              title={`ID: ${barItem.id}, Value: ${barItem.value}`}
             />
           );
         })}

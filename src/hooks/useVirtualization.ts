@@ -6,7 +6,7 @@ type UseVirtualizationReturn = {
 }
 
 type UseVirtualizationProps = {
-    scrollLeft: number;
+    currentScrollX: number;
     containerWidth: number;
     barStep: number;
     barsLength: number;
@@ -14,7 +14,7 @@ type UseVirtualizationProps = {
 }
 
 export const useVirtualization = (props: UseVirtualizationProps): UseVirtualizationReturn => {
-    const { scrollLeft, containerWidth, barStep, barsLength, overscan } = props;
+    const { currentScrollX, containerWidth, barStep, barsLength, overscan } = props;
 
     const barsPerView = useMemo(
         () => Math.ceil(containerWidth / barStep) || 1,
@@ -22,8 +22,8 @@ export const useVirtualization = (props: UseVirtualizationProps): UseVirtualizat
     );
 
     const startIndex = useMemo(
-        () => Math.max(0, Math.floor(scrollLeft / barStep) - overscan),
-        [scrollLeft, barStep, overscan]
+        () => Math.max(0, Math.floor(currentScrollX / barStep) - overscan),
+        [currentScrollX, barStep, overscan]
     );
 
     const endIndex = useMemo(

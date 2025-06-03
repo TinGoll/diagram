@@ -1,4 +1,4 @@
-import { useCallback, useState, type RefObject } from "react";
+import { useCallback, useState } from "react";
 import type { BarData } from "../TimelineChart";
 
 type UseBarSelectionReturn<T = unknown> = {
@@ -9,21 +9,16 @@ type UseBarSelectionReturn<T = unknown> = {
 type UseBarSelectionProps<T = unknown> = {
     externalValue?: string;
     onBarClick?: (id: string, bar: BarData<T>) => void;
-    didMoveSignificantlyRef: RefObject<boolean>;
 }
 
 export const useBarSelection = <T = unknown>(props: UseBarSelectionProps<T>): UseBarSelectionReturn<T> => {
-    const { externalValue, onBarClick, didMoveSignificantlyRef } = props;
+    const { externalValue, onBarClick } = props;
 
     const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
-    const selectedId = externalValue ?? internalSelectedId;
+    const selectedId = externalValue !== undefined ? externalValue : internalSelectedId;
 
     const handleBarClick = useCallback(
         (bar: BarData<T>) => {
-            if (didMoveSignificantlyRef.current) {
-                return;
-            }
-
             if (externalValue === undefined) {
                 setInternalSelectedId(bar.id);
             }

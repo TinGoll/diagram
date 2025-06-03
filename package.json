@@ -13,6 +13,7 @@
     "@emotion/styled": "^11.14.0",
     "clsx": "^2.1.1",
     "es-toolkit": "^1.38.0",
+    "motion": "^12.16.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

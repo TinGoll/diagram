@@ -10,7 +10,7 @@ const Grid = styled.div`
   & .block {
     min-height: 0px;
     min-width: 0px;
-    border: 2px solid pink;
+    border: 1px solid #dfdfdf;
 
     padding-top: 8px;
   }
@@ -32,14 +32,14 @@ export const App = () => {
           />
         </div>
         <div className="block">
-          <TimelineChart
+          {/* <TimelineChart
             bars={Array.from({ length: 100 }, (_, i) => ({
               id: `bar-${i}`,
               value: Math.random() * 100,
               color: i > 120 ? "#f66" : "#ccc",
             }))}
             onBarClick={(id) => console.log("Clicked:", id)}
-          />
+          /> */}
         </div>
       </Grid>
     </StyledApp>
