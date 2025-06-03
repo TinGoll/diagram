@@ -160,17 +160,10 @@ export const TimelineChart = <T = unknown,>(props: Props<T>) => {
           setIsVisuallyDragging(false);
           handleDragEnd(event, info);
         }}
-        dragElastic={0.05} // Настройте по вкусу (0 для отсутствия "резины")
+        dragElastic={0.05}
         dragTransition={{
-          // Ключевая настройка инерции!
-          power: 0.4, // Дальность "броска" (0.3 - 0.8)
-          timeConstant: 400, // Длительность инерции (300ms - 700ms)
-          // Другие параметры для тонкой настройки:
-          // bounceStiffness: 500,
-          // bounceDamping: 25,
-          // min: dragConstraints.left, // Можно явно задать, если нужно
-          // max: dragConstraints.right,
-          // restDelta: 0.5, // Порог для остановки анимации
+          power: 0.5, 
+          timeConstant: 400, 
         }}
       >
         {bars.slice(startIndex, endIndex).map((barItem, i) => {

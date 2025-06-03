@@ -20,6 +20,7 @@ type UseScrollAndDragProps = {
 
 export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDragReturn => {
     const {
+        barStep,
         totalWidth,
         containerWidth,
         isScrollable,
@@ -29,10 +30,10 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
 
     const calculateInitialX = useCallback(() => {
         return -Math.min(
-            Math.max(0, initialScrollIndex * props.barStep),
+            Math.max(0, initialScrollIndex * barStep),
             Math.max(0, totalWidth - containerWidth)
         );
-    }, [initialScrollIndex, props.barStep, totalWidth, containerWidth]);
+    }, [initialScrollIndex, barStep, totalWidth, containerWidth]);
 
     const x = useMotionValue(calculateInitialX());
     const [currentScrollX, setCurrentScrollX] = useState(-x.get());
@@ -41,10 +42,12 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
     const isDraggingOptimizationRef = useRef(false);
 
     useEffect(() => {
-        const unsubscribeX = x.onChange((latestX) => {
+        const unsubscribeX = x.on("change", (latestX) => {
             setCurrentScrollX(-latestX);
         });
+
         setCurrentScrollX(-calculateInitialX());
+
         return () => {
             unsubscribeX();
         };
@@ -65,7 +68,6 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
             }
             const movedDistance = Math.sqrt(info.offset.x ** 2 + info.offset.y ** 2);
             if (movedDistance > dragThreshold) {
-                console.log('[useTimelineMotion handleDrag] Significant move detected.');
                 didMoveSignificantlyRef.current = true;
             }
         },
@@ -73,11 +75,9 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
     );
 
     const handleDragEnd = useCallback(
-        () => {
+        (_: MouseEvent | TouchEvent | PointerEvent) => {
             isDraggingOptimizationRef.current = false;
-            if (!isScrollable) {
-                return;
-            };
+            if (!isScrollable) return;
         },
         [isScrollable]
     );
@@ -89,7 +89,6 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
         }
     }, [initialScrollIndex, calculateInitialX, x]);
 
-
     return {
         x,
         handleDragStart,
@@ -97,5 +96,4 @@ export const useScrollAndDrag = (props: UseScrollAndDragProps): UseScrollAndDrag
         handleDragEnd,
         currentScrollX,
     };
-
 }
