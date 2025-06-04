@@ -1,10 +1,10 @@
 import { debounce } from "es-toolkit";
 import {
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
   useState,
-  type RefObject,
 } from "react";
 
 type UseContainerDimensionsReturn = {
@@ -12,47 +12,50 @@ type UseContainerDimensionsReturn = {
   isScrollable: boolean;
   totalWidth: number;
 };
-
 type UseContainerDimensionsProps = {
   containerRef: RefObject<HTMLDivElement | null>;
-  barsLength: number;
+  barsLenght: number;
   barStep: number;
 };
 
 export const useContainerDimensions = (
   props: UseContainerDimensionsProps
 ): UseContainerDimensionsReturn => {
-  const { barStep, barsLength, containerRef } = props;
+  const { containerRef, barsLenght, barStep } = props;
   const [containerWidth, setContainerWidth] = useState<number>(0);
   const [isScrollable, setIsScrollable] = useState<boolean>(false);
 
-  const totalWidth = barsLength * barStep;
+  const totalWidth = barsLenght * barStep;
 
-  const updateContainerState = useCallback(() => {
+  const updateContainer = useCallback(() => {
     const container = containerRef.current;
     if (container) {
       setContainerWidth(container.offsetWidth);
       setIsScrollable(totalWidth > container.clientWidth);
     }
-  }, [totalWidth]);
+  }, [containerRef, totalWidth]);
 
-  const debouncedUpdateContainerState = useMemo(
-    () => debounce(updateContainerState, 50),
-    [updateContainerState]
+  const debouncedUpdateContainer = useMemo(
+    () => debounce(updateContainer, 50),
+    [updateContainer]
   );
 
   useEffect(() => {
-    updateContainerState();
-    window.addEventListener("resize", debouncedUpdateContainerState);
-    return () => {
-      window.removeEventListener("resize", debouncedUpdateContainerState);
-      debouncedUpdateContainerState.cancel?.();
+    updateContainer(); // Initial call
+    window.addEventListener("resize", debouncedUpdateContainer);
+    return (): void => {
+      window.removeEventListener("resize", debouncedUpdateContainer);
+      debouncedUpdateContainer.cancel?.();
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedUpdateContainer, updateContainer]); // Добавлены зависимости
 
+  // Этот useEffect может быть избыточным, если updateContainer вызывается при изменении totalWidth/barsLength
+  // или если мы хотим обновить размеры при изменении этих параметров, а не только при resize.
+  // Оставим его, так как он был в оригинале и может иметь смысл при динамическом изменении barsLength/barStep.
   useEffect(() => {
-    updateContainerState();
-  }, [updateContainerState]);
+    updateContainer();
+  }, [updateContainer]);
 
   return {
     containerWidth,
